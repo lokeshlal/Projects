@@ -1,0 +1,98 @@
+
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="UTF-8">
+    <title>LargeData by lokeshlal</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" type="text/css" href="https://lokeshlal.github.io/WCFLoadUI/stylesheets/normalize.css" media="screen">
+    <link href='https://fonts.googleapis.com/css?family=Open+Sans:400,700' rel='stylesheet' type='text/css'>
+    <link rel="stylesheet" type="text/css" href="https://lokeshlal.github.io/WCFLoadUI/stylesheets/stylesheet.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="https://lokeshlal.github.io/WCFLoadUI/stylesheets/github-light.css" media="screen">
+  </head>
+  <body>
+    <section class="page-header">
+      <h1 class="project-name">LargeData</h1>
+      <h2 class="project-tagline">To send and recieve large data sets from REST APIs Edit</h2>
+      <a href="https://github.com/lokeshlal/LargeData" class="btn">View on GitHub</a>
+      <a href="https://github.com/lokeshlal/LargeData/zipball/master" class="btn">Download .zip</a>
+      <a href="https://github.com/lokeshlal/LargeData/tarball/master" class="btn">Download .tar.gz</a>
+    </section>
+
+    <section class="main-content">
+      <h1>LargeData</h1>
+
+<p>Recently I was working with a problem, where we have to transfer 5 GB (maximum or first load) of data set across client (WPF client) and server (Web APIs) (both download and upload). All this need to happen over vpn connection and users are across the world with a varying internet speed (which sometimes could be as low as 16 kbps).</p>
+<p>Initial implementation was to leverage the existing sync frameworks to synchronize the data and let the framework handle all the changes done by the user in the database. However, the sync framework was making things very slow because of database triggers (impacting inserts and updates, as in one transaction a maximum of 100K records could be inserted or updated)</p>
+<p>Time taken by sync framework was approximately ~30 minutes to sync the entire data from server to client and  &gt;1 hr to sync back from client to server.</p>
+<p>To solve this performance bottleneck, first thing is to get rid of sync framework. but then again how do we keep track of changes without much changes in existing code (as everything else is working just fine except the data synchronization)</p>
+<p>This part is not covered in the above library, that is, how to keep track of what changed.
+So we already have a "rowversion" column in all the tables (we were using SQL server), which is always incremental across the DB. So to keep track of childs, what we need to do is to add a LastSyncedOn column in the parent table (for all the child table) and set LastSyncedOn to @DBTS. which means last time database was synced on that this timestamp and if any child table rowversion is greater than this value, then it a new row (either inserted or updated).</p>
+<p>On the basis of this we created the DataSet, both at client and server. Feed the dataset to the above utility and send it across.</p>
+<p>After doing these changes, we were able to download the same data set in &lt;5 minutes and upload in &lt;10 minutes (depend upon the changes done in the data at the client side).</p>
+<p>At some places, we also ended up using datareader, as dataset was giving out of memory exception.</p>
+<h4>Download flow</h4>
+<p><a href="https://raw.githubusercontent.com/lokeshlal/LargeData/master/download_process.png" target="_blank"><img src="https://raw.githubusercontent.com/lokeshlal/LargeData/master/download_process.png" alt="Download process" style="max-width:100%;"></a></p>
+<h4>Upload flow</h4>
+<p><a href="https://raw.githubusercontent.com/lokeshlal/LargeData/master/upload_process.png" target="_blank"><img src="https://raw.githubusercontent.com/lokeshlal/LargeData/master/upload_process.png" alt="Upload process" style="max-width:100%;"></a></p>
+<h4>Server configuration</h4>
+<p>To include LargeData controller, please add following line in the Global file Application_Start() event</p>
+<div class="highlight highlight-source-cs"><pre><span class="pl-en">GlobalConfiguration.Configuration.Services.Replace</span>(<span class="pl-en">typeof</span>(IAssembliesResolver), new <span class="pl-en">AssemblyResolver</span>());</pre></div>
+<p>For download process</p>
+<div class="highlight highlight-source-cs"><pre><span class="pl-c">// for data reader, set following property for download</span>
+<span class="pl-en">ServerSettings.CallbackReader</span> = DataProvider.GetDataReaderForDownload;
+<span class="pl-c">// for data set, set following property for download</span>
+<span class="pl-en">ServerSettings.Callback</span> = DataProvider.GetDataReaderForDownload;</pre></div>
+<p>For upload process</p>
+<div class="highlight highlight-source-cs"><pre><span class="pl-c">// for data reader, set following property for upload</span>
+<span class="pl-en">ServerSettings.CallbackUploadReader</span> = DataReciever.AcceptDataReader;
+<span class="pl-c">// for data set, set following property for upload</span>
+<span class="pl-en">ServerSettings.CallbackUpload</span> = DataReciever.AcceptDataSet;</pre></div>
+<p>Staging location, where temporary files will be stored</p>
+<div class="highlight highlight-source-cs"><pre><span class="pl-en">ServerSettings.TemporaryLocation</span> = @"E:\TempLocation";</pre></div>
+<p>General server configuration</p>
+<div class="highlight highlight-source-cs"><pre><span class="pl-c">// Maximum number of records in each file</span>
+<span class="pl-en">ServerSettings.MaxRecordsInAFile</span> = 10;</pre></div>
+<h4>Client configuration</h4>
+<div class="highlight highlight-source-cs"><pre><span class="pl-c">// Either this can be set once or passed in Get/Set Data methods</span>
+<span class="pl-c">// Rest API Base URI</span>
+<span class="pl-en">ClientSettings.BaseUri</span> = "http:<span class="pl-c">//api.base.com"</span>
+<span class="pl-c">// Temporary location for staging files</span>
+ClientSettings.TemporaryLocation = @"E:\location"</pre></div>
+<h4>Filter class</h4>
+<p>Use filter class to send additional information about upload and download.
+Filters can be used in the Callbacks to retrieve the data and to process the data. Filter can have following (but not limited to)</p>
+<ol>
+<li>User information</li>
+<li>Database filters</li>
+<li>Tag to be associated with the request</li>
+</ol>
+<h4>LargeData structure</h4>
+<p>LargeData is a single assembly containing code for both client as well server.
+Client directly references the assembly and uses LargeData.Client.LargeData class to send and recieve the datasets.
+Server also references the assembly and registers the LargeData controller in the Global class (as mentioned in above section "Server Configuration")</p>
+<p><a href="https://raw.githubusercontent.com/lokeshlal/LargeData/master/largedata_structure.png" target="_blank"><img src="https://raw.githubusercontent.com/lokeshlal/LargeData/master/largedata_structure.png" alt="LargeData Structure" style="max-width:100%;"></a></p>
+<p>LargeData provides output in 2 format,</p>
+<ol>
+<li>Data set (generally for smaller set of data)</li>
+<li>Data reader (for large data sets)</li>
+</ol>
+<p>REST APIs will have to provide a method to handle all incoming upload and download request. This will be a single method for all sort of upload and download request. So to handle various scenarios, this method also accept List&lt;Filter&gt; (as mentioned in section "Filter class") to differentiate between different type of request.</p>
+<p>Please note, background worker process is running in ASP.NET context, this process can be triggered via Hangfire, Quartz or a separate windows service could also be created (based upon the requirements, in my original code, I have written a windows service for the background process, however I feel hangfire is a good fit).</p>
+<h4>Sample</h4>
+<p>Please have a look at the Client and WebApi project on how to use this library.
+Client project contains code of how to trigger upload and download request.
+WebApi project contains how to process upload and download request.</p>
+
+
+      <footer class="site-footer">
+        <span class="site-footer-owner"><a href="https://github.com/lokeshlal/LargeData">LargeData</a> is maintained by <a href="https://github.com/lokeshlal">lokeshlal</a>.</span>
+
+        <span class="site-footer-credits">This page was generated by <a href="https://pages.github.com">GitHub Pages</a> using the <a href="https://github.com/jasonlong/cayman-theme">Cayman theme</a> by <a href="https://twitter.com/jasonlong">Jason Long</a>.</span>
+      </footer>
+
+    </section>
+
+  
+  </body>
+</html>
